@@ -1,0 +1,26 @@
+name: uslive_mobile
+description: Flutter client for the uslive communication platform.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+  flutter: ">=3.38.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  livekit_client: ^2.13.2
+  dio: ^5.11.1
+  web_socket_channel: ^3.0.3
+  drift: ^2.35.4
+  sqlite3_flutter_libs: ^0.5.42
+  flutter_callkit_incoming: ^3.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
