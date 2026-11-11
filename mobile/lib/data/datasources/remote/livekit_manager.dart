@@ -26,6 +26,22 @@ class LiveKitManager {
     await participant.setScreenShareEnabled(enabled);
   }
 
+  Future<void> toggleMicrophone() async {
+    final participant = _room?.localParticipant;
+    if (participant == null) {
+      throw StateError('Not connected to a LiveKit room');
+    }
+    await participant.setMicrophoneEnabled(!participant.isMicrophoneEnabled());
+  }
+
+  Future<void> toggleCamera() async {
+    final participant = _room?.localParticipant;
+    if (participant == null) {
+      throw StateError('Not connected to a LiveKit room');
+    }
+    await participant.setCameraEnabled(!participant.isCameraEnabled());
+  }
+
   Future<void> disconnect() async {
     final room = _room;
     _room = null;

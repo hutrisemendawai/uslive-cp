@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Shell(git:*)"
+      "Shell(git:*)",
+      "powershell",
+      "Shell(dir /b /s \"%LOCALAPPDATA%\\Pub\\Cache\\hosted\\pub.dev\\livekit_client-2.13.2\\lib\\src\\room.dart\" 2>nul & echo --- & dir /b \"%LOCALAPPDATA%\\Pub\\Cache\\hosted\\pub.dev\" 2>nul | findstr /i livekit)",
+      "Shell(where flutter 2>nul & echo ---PUB--- & echo %PUB_CACHE% & echo ---LOCALAPPDATA--- & echo %LOCALAPPDATA% & echo ---HOME--- & echo %USERPROFILE%)",
+      "Shell(dir /b \"C:\\Users\\ASROCK-PG\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\" 2>nul | findstr /i \"livekit drift\")",
+      "Shell(dir /b \"C:\\Users\\ASROCK-PG\\AppData\\Local\\Pub\\Cache\\hosted\\pub.dev\" 2>nul)"
     ],
     "deny": [],
     "defaultMode": "default"
