@@ -1,0 +1,100 @@
+name: uslive
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: uslive-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-uslive}
+      POSTGRES_USER: ${POSTGRES_USER:-uslive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uslive-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: uslive-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uslive-net
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: uslive-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-uslive_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - uslive-net
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: uslive-coturn
+    restart: unless-stopped
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--realm=${TURN_REALM:-uslive.local}"
+      - "--listening-port=3478"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--fingerprint"
+      - "--lt-cred-mech"
+      - "--user=${TURN_USER:-uslive}:${TURN_PASSWORD:?Set TURN_PASSWORD in .env}"
+      - "--no-cli"
+      - "--no-multicast-peers"
+      - "--no-tlsv1"
+      - "--no-tlsv1_1"
+      - "--external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}"
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+    volumes:
+      - coturn_data:/var/lib/coturn
+    networks:
+      - uslive-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  coturn_data:
+
+networks:
+  uslive-net:
+    driver: bridge
