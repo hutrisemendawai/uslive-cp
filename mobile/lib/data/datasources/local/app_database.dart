@@ -1,31 +1,16 @@
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 
-class AppDatabase extends GeneratedDatabase {
-  AppDatabase() : super(NativeDatabase.memory());
+import 'daos/messages_dao.dart';
+import 'tables/messages_table.dart';
+
+part 'app_database.g.dart';
+
+@DriftDatabase(tables: [LocalMessages], daos: [MessagesDao])
+class AppDatabase extends _$AppDatabase {
+  AppDatabase([QueryExecutor? executor])
+      : super(executor ?? NativeDatabase.memory());
 
   @override
   int get schemaVersion => 1;
-
-  @override
-  MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async {
-          await customStatement('''
-            CREATE TABLE messages (
-              id TEXT PRIMARY KEY,
-              conversation_id TEXT NOT NULL,
-              sender_id TEXT NOT NULL,
-              content TEXT NOT NULL,
-              created_at INTEGER NOT NULL
-            )
-          ''');
-        },
-      );
-
-  Future<List<Map<String, dynamic>>> messages() async {
-    final rows = await customSelect(
-      'SELECT * FROM messages ORDER BY created_at ASC',
-    ).get();
-    return rows.map((row) => row.data).toList();
-  }
 }
