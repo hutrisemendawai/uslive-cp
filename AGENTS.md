@@ -1,101 +1,154 @@
-Agents Architecture & Design (System & AI)
-To build a scalable and intelligent internal communication application (equivalent to MS Teams with AI features), the architecture must be equipped with an Agents system. These agents run in the backend (as microservices or background workers), separated from the main API so they do not overload the signaling and chat channels.
+# Agents Architecture & Design (System + AI)
 
-Here is the design for the agents integrated with your LiveKit, Redis, and PostgreSQL architecture.
+This document maps conceptual agents to concrete Spring Boot endpoints, PostgreSQL/Redis/MinIO data paths, and the Google Stitch-generated Flutter UI flow used by this repository.
 
-1. AI Agents (Productivity & Intelligence)
-These agents interact directly with user data (audio/text) to provide Artificial Intelligence (NLP/LLM) based value-adds.
+## 1. Frontend Architecture: Google Stitch Screens + Runtime Wiring
 
-A. Meeting Assistant & Summarizer Agent
-Role: Attends video/voice meetings to generate automated minutes, transcriptions, and Action Items.
+The current Flutter presentation layer is generated as static UI shells from Google Stitch and then connected to runtime services:
 
-How it Works (LiveKit Integration):
+- **Call Screen** (`mobile/lib/presentation/pages/call_screen.dart`)
+  - Real-time meeting UI wired to `LiveKitManager` (`mobile/lib/data/datasources/remote/livekit_manager.dart`).
+  - Uses LiveKit SDK room state and controls (`connect`, `toggleMicrophone`, `toggleCamera`, `setShareScreenEnabled`, `disconnect`).
+  - Receives in-call data messages and persists them through `AppDatabase` message DAO.
+- **Today Hub** (`mobile/lib/presentation/pages/today_hub_screen.dart`)
+  - Stitch-generated static layout for daily summary + agenda.
+  - Backend contract: `GET /api/v1/dashboard` for `aiMorningBriefing` + `upcomingMeetings`.
+- **Team Chat & Channels** (`mobile/lib/presentation/pages/team_chat_screen.dart`)
+  - Stitch-generated static chat list and **Smart Chat Catch-up** banner.
+  - Backend contract for banner CTA: `POST /api/v1/conversations/{id}/summarize`.
+- **Meeting Details & AI Recap** (`mobile/lib/presentation/pages/meeting_details_screen.dart`)
+  - Stitch-generated recap UI (executive summary, action items, recording chapters).
+  - Backend contract: `GET /api/v1/meetings/{id}/recap`.
 
-When a meeting starts, this agent joins the LiveKit Room as a hidden participant (participant without video).
+Integration layer:
 
-The agent receives the audio stream from the LiveKit SFU.
+- HTTP client: `mobile/lib/data/datasources/remote/api_client.dart` (`Dio` wrapper for `get`/`post`).
+- Repositories/view-models should bind Stitch static widgets to these API responses while preserving generated visual structure.
+- Live session UX remains on LiveKit path (`CallScreen` + `LiveKitManager`), while recap/catch-up/dashboard consume REST responses.
 
-The audio is processed using a Speech-to-Text (STT) model like Whisper in real-time or via post-processing.
+## 2. AI Agents Mapped to Concrete APIs and Storage
 
-The transcribed text is sent to an LLM (Large Language Model) for summarization.
+### A. Meeting Assistant & Summarizer Agent
 
-The summary results are saved to the messages table in PostgreSQL (with type: 'FILE' or as long text) under that meeting's conversation_id.
+**Role:** joins LiveKit meeting audio, transcribes, summarizes, and serves recap data.
 
-Tech Stack: Python, LiveKit Python SDK, OpenAI API / Local LLM (Ollama), Redis (for task queues).
+**API mapping:**
 
-B. Internal Knowledge Chatbot (RAG Agent)
-Role: Answers employee questions related to HR, IT Support, or company SOPs directly in Direct Message rooms.
+- `GET /api/v1/meetings/{id}/recap` (`MeetingRecapController`) returns recap payload for Meeting Details.
+- Service path: `MeetingRecapService` reads meeting metadata + recap content.
 
-How it Works:
+**Database/object storage mapping:**
 
-The agent has an account in the users table (e.g., "IT Support Bot").
+- Source row: `meetings` table.
+- Recording asset: `meetings.recording_url` points to MinIO object.
+- AI recap payload: `meetings.ai_recap` (`JSONB`) parsed into:
+  - `executive_summary`
+  - `action_items[]`
+- Participant access guard: `meeting_participants` membership check via join query.
 
-Listens (subscribes) to Redis Pub/Sub for incoming messages to its conversation_id, or for mentions of its name (e.g., @HRBot).
+**Processing flow:**
 
-Uses RAG (Retrieval-Augmented Generation) techniques to search for SOP documents in a Vector Database (such as pgvector in PostgreSQL).
+1. Agent joins LiveKit room as hidden participant.
+2. Captures SFU audio stream, performs STT + LLM summarization.
+3. Writes structured JSON recap into `meetings.ai_recap` and recording URL into `meetings.recording_url`.
+4. Meeting Details screen consumes recap via `GET /api/v1/meetings/{id}/recap`.
 
-Sends replies via WebSocket API just like a regular user.
+### B. Smart Triage / Catch-up Agent
 
-C. Smart Triage / Catch-up Agent
-Role: Summarizes group conversations if a user has been offline for too long and missed hundreds of messages.
+**Role:** generates short catch-up summaries for missed channel activity.
 
-How it Works:
+**API mapping (direct):**
 
-When the Flutter client sends an online signal, the system checks the last_read_message_id.
+- `POST /api/v1/conversations/{id}/summarize` (`ConversationSummaryController`).
+- Called from Team Chat **Smart Chat Catch-up** banner CTA (“Generate 30-sec summary”).
 
-If the message gap is > 50, the client triggers a REST API to request a summary.
+**Eventing + storage mapping:**
 
-The agent reads the text history from PostgreSQL, summarizes it using an LLM, and returns it to the client without permanently saving it to the main database.
+- Service: `ConversationSummaryService`.
+- Validates user membership using `conversation_members`.
+- Publishes `SummarizeRequestedEvent` to Redis Pub/Sub channel:
+  - default: `agents:chat-summarization`
+  - transport: `StringRedisTemplate.convertAndSend(...)`
+- Source text is read from `messages` scoped by `conversation_id`.
 
-2. System Agents (Background Workers)
-These infrastructure agents are tasked with maintaining performance, performing cleanups, and processing heavy-lifting tasks asynchronously.
+**UI integration point:**
 
-A. Media Processing & Transcoding Agent
-Role: Manages meeting recordings and large file attachments.
+- Banner component in `team_chat_screen.dart` is the trigger surface for this endpoint and should display the returned/streamed summary result.
 
-How it Works:
+### C. AI Morning Briefing Agent
 
-LiveKit Egress is instructed to record composite video and save it to MinIO (S3).
+**Role:** generates a daily personalized briefing for the Today Hub.
 
-After the recording is complete, a LiveKit webhook triggers this agent.
+**API mapping:**
 
-The agent performs additional video compression (using FFmpeg) or generates thumbnails.
+- `GET /api/v1/dashboard` (`DashboardController`) returns:
+  - `aiMorningBriefing`
+  - `upcomingMeetings[]`
 
-Updates the meetings table in PostgreSQL with the MinIO URL of the recording and sends a notification to the group chat that the recording is ready.
+**Data mapping:**
 
-B. Presence & Notification Router Agent
-Role: Manages Online/Offline status synchronization and Push Notification routing.
+- Agenda source already queried from `meetings` + `meeting_participants` in `DashboardService`.
+- Briefing field is currently placeholder-backed in service; production agent should populate `aiMorningBriefing` from generated output (persisted cache/table or Redis-backed materialization) before dashboard reads.
 
-How it Works:
+**UI integration point:**
 
-Listens to WebSocket heartbeats from Redis. If a user disconnects without a logout signal (e.g., connection lost), this agent waits for a grace period (e.g., 10 seconds).
+- Today Hub screen consumes `aiMorningBriefing` and meeting list for personalized morning context.
 
-If the user remains disconnected, the agent updates the user's status in Redis to offline and updates last_seen_at in PostgreSQL.
+### D. Internal Knowledge Chatbot (RAG Agent)
 
-Takes over pending message delivery: If there is an incoming message for an offline user, the agent formats the FCM (Android) or APNs (iOS) payload, adds the badge count, and calls the Firebase/Apple API.
+**Role:** responds in DM/channel threads using internal knowledge.
 
-C. Data Archiving & Cleanup Agent
-Role: Prevents the PostgreSQL database (messages table) from bloating and consuming too much memory.
+**System mapping:**
 
-How it Works:
+- Bot identity stored in `users` (`is_bot = true`).
+- Message IO through `messages` / `conversations`.
+- Triggered from Redis Pub/Sub (mention/message events), retrieves context from pgvector/knowledge index, replies via backend messaging channel.
 
-Runs as a Cron Job (e.g., every 2 AM).
+## 3. System Agents (Background Workers)
 
-Moves chat messages older than 1 year to Cold Storage (archive tables or log files in MinIO), depending on the company's data retention policy.
+### A. Media Processing & Transcoding Agent
 
-Cleans up stale session caches or expired LiveKit tokens in Redis.
+- Triggered by LiveKit egress/webhook completion events.
+- Processes recordings with FFmpeg, stores object in MinIO, updates `meetings.recording_url`.
+- Notifies conversation stream when recording is ready.
 
-3. Agents Communication Flow with the Core System
-To avoid bottlenecks, the Agents use an Event-Driven pattern:
+### B. Presence & Notification Router Agent
 
-Plaintext
-[Flutter Client] 
-   └─> (WebSocket/REST) 
-         └─> [Backend (Spring/Go)] 
-                 ├─> [PostgreSQL] (Save Data)
-                 └─> [Redis Pub/Sub or Message Queue (RabbitMQ/Kafka)]
-                         │
-                         ├─> Consumes Event ──> [AI RAG Bot] 
-                         ├─> Consumes Event ──> [Notification Agent]
-                         └─> Consumes Event ──> [Media Processing Agent]
-Advantage: The main backend (Go/Spring Boot) will respond to user messages in milliseconds because heavy tasks are offloaded to a Message Broker (Redis/RabbitMQ) to be executed by the Agents separately.
+- Consumes heartbeat/session events from Redis.
+- Updates online state + `users.last_seen_at`.
+- Routes offline notifications to FCM/APNs.
+
+### C. Data Archiving & Cleanup Agent
+
+- Scheduled jobs archive old `messages` data to cold storage.
+- Cleans stale Redis session/token keys.
+
+## 4. Concrete Endpoint-to-Agent Matrix
+
+| Endpoint | Spring Handler | Agent | Primary UI Surface | Main Data Path |
+|---|---|---|---|---|
+| `POST /api/v1/conversations/{id}/summarize` | `ConversationSummaryController` + `ConversationSummaryService` | Smart Triage / Catch-up Agent | Team Chat `Smart Chat Catch-up` banner | `conversation_members` authorization → Redis Pub/Sub (`agents:chat-summarization`) → summarize `messages` |
+| `GET /api/v1/meetings/{id}/recap` | `MeetingRecapController` + `MeetingRecapService` | Meeting Assistant & Summarizer Agent | Meeting Details & AI Recap screen | `meetings.ai_recap` (JSONB), `meetings.recording_url` (MinIO), `meeting_participants` membership |
+| `GET /api/v1/dashboard` | `DashboardController` + `DashboardService` | AI Morning Briefing Agent | Today Hub screen | Meeting agenda from `meetings` + `meeting_participants`; briefing text generated daily by agent |
+
+## 5. Event-Driven Communication Flow (Explicit Spring Boot → Redis Pub/Sub)
+
+```text
+[Flutter App (Stitch screens + LiveKit UI)]
+    ├─ Call Screen ──> LiveKitManager ──> LiveKit SFU
+    └─ REST (Today/Chat/Recap)
+          └─> [Spring Boot API]
+                ├─ Persist/query PostgreSQL (users, conversations, messages, meetings, meeting_participants)
+                ├─ Store/fetch recording objects in MinIO (meeting recording_url targets)
+                └─ Publish domain events to Redis Pub/Sub
+                      ├─ summarize.requested  -> Smart Triage / Catch-up Agent
+                      ├─ meeting.ended / recording.ready -> Meeting Assistant + Media Processing Agents
+                      └─ dashboard.briefing.requested (or scheduled) -> AI Morning Briefing Agent
+
+[Agents Workers]
+    ├─ Consume Redis events
+    ├─ Run STT/LLM/RAG or media processing
+    └─ Write outputs back (PostgreSQL/MinIO/notifications) for API read models
+```
+
+Why this pattern: Spring Boot remains low-latency for user-facing requests while heavy AI/media workloads run asynchronously in agents triggered through Redis Pub/Sub.
