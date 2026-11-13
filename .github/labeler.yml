@@ -1,0 +1,35 @@
+backend:
+  - backend/**
+  - "backend/**/*.go"
+  - "backend/**/*.java"
+
+mobile:
+  - mobile/**
+  - "mobile/**/*.dart"
+  - "mobile/**/*.yaml"
+
+agents:
+  - agents/**
+  - "agents/**/*.go"
+  - "agents/**/*.md"
+
+database:
+  - db/**
+  - "db/**/*.sql"
+  - docker-compose.yml
+
+ci:
+  - .github/**
+  - ".github/**/*.yml"
+  - ".github/**/*.yaml"
+
+documentation:
+  - README.md
+  - "**/*.md"
+  - AGENTS.md
+
+config:
+  - go.mod
+  - backend/go.mod
+  - agents/**/go.mod
+  - mobile/pubspec.yaml
